@@ -1,18 +1,14 @@
+namespace customauthpg.Services;
 
-using BCrypt.Net;
-
-namespace YourNamespace.Services
+public class PasswordHasher
 {
-    public class PasswordHasher
+    public string HashPassword(string password)
     {
-        public string HashPassword(string password)
-        {
-            return BC.HashPassword(password, BC.GenerateSalt(12));
-        }
+        return BC.HashPassword(password, BC.GenerateSalt(10));
+    }
 
-        public bool VerifyPassword(string password, string hash)
-        {
-            return BC.Verify(password, hash);
-        }
+    public bool VerifyPassword(string password, string hash)
+    {
+        return BC.Verify(password, hash);
     }
 }

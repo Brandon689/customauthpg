@@ -1,82 +1,45 @@
-﻿using Npgsql;
-using Microsoft.Extensions.Configuration;
-using System;
-using System.Threading.Tasks;
+﻿using customauthpg.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Npgsql;
 
-namespace YourNamespace.Services
+namespace customauthpg.Services;
+
+public class DatabaseInitializer
 {
-    public class DatabaseInitializer
+    private readonly ILogger<DatabaseInitializer> _logger;
+    private readonly string _connectionString;
+
+    public DatabaseInitializer(IOptions<ConnectionStrings> connectionStrings, ILogger<DatabaseInitializer> logger)
     {
-        private readonly IConfiguration _configuration;
-        private readonly ILogger<DatabaseInitializer> _logger;
+        _connectionString = connectionStrings.Value.DefaultConnection;
+        _logger = logger;
+    }
 
-        public DatabaseInitializer(IConfiguration configuration, ILogger<DatabaseInitializer> logger)
+    public async Task InitializeAsync()
+    {
+        if (string.IsNullOrEmpty(_connectionString))
         {
-            _configuration = configuration;
-            _logger = logger;
+            _logger.LogError("Connection string is not properly configured.");
+            throw new InvalidOperationException("Connection string is not properly configured.");
         }
 
-        public async Task InitializeAsync()
-        {
-            var adminConnectionString = _configuration.GetConnectionString("AdminConnection");
-            var appConnectionString = _configuration.GetConnectionString("DefaultConnection");
+        await CreateTablesAsync();
+        await SeedDataAsync();
+    }
 
-            await CreateDatabaseAndUserAsync(adminConnectionString);
-            await CreateTablesAsync(appConnectionString);
-        }
+    private async Task CreateTablesAsync()
+    {
+        using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
 
-        private async Task CreateDatabaseAndUserAsync(string adminConnectionString)
-        {
-            var dbName = _configuration["Database:Name"];
-            var dbUser = _configuration["Database:User"];
-            var dbPassword = _configuration["Database:Password"];
+        await CreateUsersTableAsync(connection);
+        // Add more table creation methods as needed
+    }
 
-            using var connection = new NpgsqlConnection(adminConnectionString);
-            await connection.OpenAsync();
-
-            // Create database
-            try
-            {
-                using var createDbCommand = new NpgsqlCommand($"CREATE DATABASE {dbName}", connection);
-                await createDbCommand.ExecuteNonQueryAsync();
-                _logger.LogInformation($"Database {dbName} created successfully.");
-            }
-            catch (PostgresException ex) when (ex.SqlState == "42P04") // 42P04 = duplicate_database
-            {
-                _logger.LogInformation($"Database {dbName} already exists.");
-            }
-
-            // Create user
-            try
-            {
-                using var createUserCommand = new NpgsqlCommand($"CREATE USER {dbUser} WITH ENCRYPTED PASSWORD '{dbPassword}'", connection);
-                await createUserCommand.ExecuteNonQueryAsync();
-                _logger.LogInformation($"User {dbUser} created successfully.");
-            }
-            catch (PostgresException ex) when (ex.SqlState == "42710") // 42710 = duplicate_object
-            {
-                _logger.LogInformation($"User {dbUser} already exists.");
-            }
-
-            // Grant privileges
-            using var grantCommand = new NpgsqlCommand($"GRANT ALL PRIVILEGES ON DATABASE {dbName} TO {dbUser}", connection);
-            await grantCommand.ExecuteNonQueryAsync();
-            _logger.LogInformation($"Privileges granted to {dbUser} on {dbName}.");
-        }
-
-        private async Task CreateTablesAsync(string appConnectionString)
-        {
-            using var connection = new NpgsqlConnection(appConnectionString);
-            await connection.OpenAsync();
-
-            await CreateUsersTableAsync(connection);
-            // Add more table creation methods as needed
-        }
-
-        private async Task CreateUsersTableAsync(NpgsqlConnection connection)
-        {
-            var command = new NpgsqlCommand(@"
+    private async Task CreateUsersTableAsync(NpgsqlConnection connection)
+    {
+        var command = new NpgsqlCommand(@"
                 CREATE TABLE IF NOT EXISTS users (
                     id SERIAL PRIMARY KEY,
                     username VARCHAR(50) UNIQUE NOT NULL,
@@ -86,10 +49,46 @@ namespace YourNamespace.Services
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                 )", connection);
 
-            await command.ExecuteNonQueryAsync();
-            _logger.LogInformation("Users table created or already exists.");
-        }
+        await command.ExecuteNonQueryAsync();
+        _logger.LogInformation("Users table created or already exists.");
+    }
 
-        // You can add more methods to create additional tables or perform other initialization tasks
+    private async Task SeedDataAsync()
+    {
+        using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync();
+
+        // Check if we need to seed data
+        var checkCommand = new NpgsqlCommand("SELECT COUNT(*) FROM users", connection);
+        var userCount = Convert.ToInt32(await checkCommand.ExecuteScalarAsync());
+
+        //if (userCount == 0)
+        {
+            // Seed users
+            var users = new List<User>
+            {
+                new User { Username = "admin", Email = "admin@example.com", PasswordHash = BC.HashPassword("adminpassword"), Role = "Admin" },
+                new User { Username = "user1", Email = "user1@example.com", PasswordHash = BC.HashPassword("password1"), Role = "User" },
+                new User { Username = "user2", Email = "user2@example.com", PasswordHash = BC.HashPassword("password2"), Role = "User" },
+                new User { Username = "user3", Email = "user3@example.com", PasswordHash = BC.HashPassword("password3"), Role = "User" }
+            };
+
+            foreach (var user in users)
+            {
+                var seedCommand = new NpgsqlCommand(@"
+                        INSERT INTO users (username, email, password_hash, role)
+                        VALUES (@username, @email, @passwordHash, @role)", connection);
+
+                seedCommand.Parameters.AddWithValue("username", user.Username);
+                seedCommand.Parameters.AddWithValue("email", user.Email);
+                seedCommand.Parameters.AddWithValue("passwordHash", user.PasswordHash);
+                seedCommand.Parameters.AddWithValue("role", user.Role);
+
+                await seedCommand.ExecuteNonQueryAsync();
+                _logger.LogInformation($"{user.Role} user '{user.Username}' seeded.");
+            }
+
+            _logger.LogInformation("All seed users have been added.");
+        }
     }
 }
