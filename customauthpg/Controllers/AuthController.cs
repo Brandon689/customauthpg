@@ -1,7 +1,9 @@
 using customauthpg.Models;
 using customauthpg.Repositories;
 using customauthpg.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Claims;
 
 namespace customauthpg.Controllers;
 
@@ -61,5 +63,30 @@ public class AuthController : ControllerBase
 
         var token = _jwtService.GenerateToken(user);
         return Ok(new { Token = token });
+    }
+
+    [HttpGet("user")]
+    [Authorize]
+    public async Task<IActionResult> GetUserInfo()
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userId) || !int.TryParse(userId, out int id))
+        {
+            return BadRequest("Invalid user ID.");
+        }
+
+        var user = await _userRepository.GetUserById(id);
+        if (user == null)
+        {
+            return NotFound("User not found.");
+        }
+
+        return Ok(new
+        {
+            user.Id,
+            user.Username,
+            user.Email,
+            user.Role
+        });
     }
 }
